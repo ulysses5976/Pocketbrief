@@ -1,0 +1,16 @@
+名稱 Name,代碼 Code,內容 Content
+Track changes,a,Please turn on Track Changes so I can see what you edited.
+Use my revised version,aa,"I've made some adjustments, please work from this version."
+Ask before acting,as,Let's discuss the approach first before you make any changes.
+Flag uncertainties,ass,"If you're not sure about something, leave it in and flag it so I can review it myself."
+Convert PDF,asd,This is an OCR'd PDF. Please convert it to Markdown.
+Email sign-off,z,"Best regards,
+[Your Name]"
+Follow-up,zz,"Just following up on my previous email, please let me know if you need anything else from me."
+Scheduling,x,"When would be a good time for you? I'm available ___."
+Thanks,xx,Thank you for your prompt reply.
+Meeting notes,c,"Attendees:
+Agenda:
+Decisions:
+Action items:"
+Email address,p,name@example.com
