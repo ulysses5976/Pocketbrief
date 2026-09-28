@@ -1,0 +1,10 @@
+# Build output
+dist/
+*.exe
+
+# Personal data created next to the exe at run time -- never commit these
+範本.csv
+設定.ini
+備份/
+*.saving
+*.bak
