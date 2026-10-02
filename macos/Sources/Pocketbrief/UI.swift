@@ -2,7 +2,23 @@
 // Copyright (c) 2026 無名小律師（楊朝淵律師）. Licensed under the MIT License; see the LICENSE file.
 import AppKit
 
+// 由上往下排的容器（捲動區的內容從頂端開始）
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 enum UI {
+    // 視窗超出螢幕可用範圍（扣掉選單列與 Dock）時，縮小並移回螢幕內
+    static func fitOnScreen(_ w: NSWindow) {
+        guard let vf = (w.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame, !vf.contains(w.frame) else { return }
+        var f = w.frame
+        f.size.width = min(f.width, vf.width)
+        f.size.height = min(f.height, vf.height)
+        f.origin.x = min(max(f.minX, vf.minX), vf.maxX - f.width)
+        f.origin.y = min(max(f.minY, vf.minY), vf.maxY - f.height)
+        w.setFrame(f, display: true)
+    }
+
     static func label(_ s: String, bold: Bool = false, size: CGFloat? = nil) -> NSTextField {
         let l = NSTextField(labelWithString: s)
         let sz = size ?? NSFont.systemFontSize

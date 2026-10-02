@@ -72,6 +72,7 @@ final class ManagerWindowController: NSWindowController, NSWindowDelegate, NSTab
     required init?(coder: NSCoder) { fatalError() }
 
     func present() {
+        if let w = window { UI.fitOnScreen(w) }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         if !didPlaceDivider {

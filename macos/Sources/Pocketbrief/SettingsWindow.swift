@@ -249,8 +249,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         autoCommit = UI.checkbox(L.t("打的代碼只對應到一筆時，不必按 Enter 就直接輸出"), on: settings.autoCommit)
         restoreClip = UI.checkbox(L.t("輸出後把剪貼簿還原成原本的內容"), on: settings.restoreClipboard)
         launchAtLogin = UI.checkbox(L.t("登入時自動啟動（每台 Mac 各自設定）"), on: SMAppService.mainApp.status == .enabled)
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 700), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 700), styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                           backing: .buffered, defer: false)
         win.title = L.f("{0} 設定", L.appName)
+        win.contentMinSize = NSSize(width: 740, height: 400)
         super.init(window: win)
         win.delegate = self
         win.isReleasedWhenClosed = false
@@ -270,6 +272,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let cancel = UI.button(L.t("取消"), self, #selector(cancelAction))
         cancel.keyEquivalent = "\u{1b}"
         let bottom = UI.hstack([UI.spacer(), cancel, ok])
+        // 分頁區隨視窗伸縮（內容放不下時在分頁裡捲動），「確定」「取消」固定在最下面
+        tabs.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .vertical)
+        tabs.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: .vertical)
         let main = UI.vstack([tabs, bottom], spacing: 10, insets: NSEdgeInsets(top: 12, left: 14, bottom: 14, right: 14))
         UI.fillWidth([tabs, bottom], in: main)
         main.translatesAutoresizingMaskIntoConstraints = false
@@ -278,7 +283,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         NSLayoutConstraint.activate([
             main.leadingAnchor.constraint(equalTo: content.leadingAnchor), main.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             main.topAnchor.constraint(equalTo: content.topAnchor), main.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            content.widthAnchor.constraint(equalToConstant: 760),
         ])
         win.contentView = content
         loadStyleControls()
@@ -289,9 +293,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    private var sized = false
+
     func present() {
         NSApp.activate(ignoringOtherApps: true)
-        window?.center()
+        if !sized, let w = window {
+            sized = true
+            // 依螢幕可用範圍（扣掉選單列與 Dock）決定高度，並置中
+            if let vf = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
+                let frame = w.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 780, height: min(820, vf.height - 60)))
+                w.setFrame(NSRect(x: vf.midX - frame.width / 2, y: vf.minY + (vf.height - frame.height) / 2,
+                                  width: frame.width, height: frame.height), display: false)
+            }
+            UI.fitOnScreen(w)
+        }
         window?.makeKeyAndOrderFront(nil)
         window?.makeFirstResponder(hotkey)
     }
@@ -312,17 +327,29 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return h
     }
 
+    // 分頁內容放在可上下捲動的區域裡：螢幕較矮時不會被截掉
     private func pageView(_ inner: NSView) -> NSView {
-        let v = NSView()
+        let doc = FlippedView()
+        doc.translatesAutoresizingMaskIntoConstraints = false
         inner.translatesAutoresizingMaskIntoConstraints = false
-        v.addSubview(inner)
+        doc.addSubview(inner)
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.documentView = doc
+        let clip = scroll.contentView
         NSLayoutConstraint.activate([
-            inner.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 18),
-            inner.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -18),
-            inner.topAnchor.constraint(equalTo: v.topAnchor, constant: 14),
-            inner.bottomAnchor.constraint(lessThanOrEqualTo: v.bottomAnchor, constant: -14),
+            doc.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+            doc.topAnchor.constraint(equalTo: clip.topAnchor),
+            doc.widthAnchor.constraint(equalTo: clip.widthAnchor),
+            inner.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 18),
+            inner.trailingAnchor.constraint(lessThanOrEqualTo: doc.trailingAnchor, constant: -18),
+            inner.topAnchor.constraint(equalTo: doc.topAnchor, constant: 14),
+            doc.bottomAnchor.constraint(equalTo: inner.bottomAnchor, constant: 14),
         ])
-        return v
+        return scroll
     }
 
     // ── 分頁一：快速鍵與行為 ──
@@ -471,7 +498,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         preview.translatesAutoresizingMaskIntoConstraints = false
         preview.heightAnchor.constraint(equalToConstant: 190).isActive = true
-        preview.widthAnchor.constraint(equalToConstant: 700).isActive = true
+        preview.widthAnchor.constraint(equalToConstant: 640).isActive = true
         let page = UI.vstack([themes, form, colorGrid, UI.label(L.t("預覽"), bold: true), preview], spacing: 14)
         return pageView(page)
     }

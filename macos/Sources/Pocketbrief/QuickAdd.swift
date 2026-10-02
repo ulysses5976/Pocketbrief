@@ -16,6 +16,7 @@ final class QuickAddWindow: NSWindowController, NSWindowDelegate, NSTextFieldDel
         guard let win = w.window else { return nil }
         NSApp.activate(ignoringOtherApps: true)
         win.center()
+        UI.fitOnScreen(win)
         win.makeKeyAndOrderFront(nil)
         win.makeFirstResponder(w.titleField)
         NSApp.runModal(for: win)
