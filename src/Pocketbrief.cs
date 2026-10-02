@@ -19,8 +19,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("常用句子範本：按快速鍵叫出清單，打代碼即可輸出")]
 [assembly: System.Reflection.AssemblyCompany("無名小律師（楊朝淵律師）")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright © 2026 無名小律師（楊朝淵律師） · MIT License")]
-[assembly: System.Reflection.AssemblyVersion("4.2.3.0")]
-[assembly: System.Reflection.AssemblyFileVersion("4.2.3.0")]
+[assembly: System.Reflection.AssemblyVersion("4.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("4.3.0.0")]
 
 namespace Pocketbrief
 {
@@ -145,6 +145,24 @@ namespace Pocketbrief
         [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr h);
         [DllImport("imm32.dll")] public static extern uint ImmGetVirtualKey(IntPtr hWnd);
         [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
+
+        // 低階鍵盤攔截（前導鍵組合，例如 `+1）
+        public const int WH_KEYBOARD_LL = 13, WM_KEYDOWN = 0x100, WM_KEYUP = 0x101, WM_SYSKEYDOWN = 0x104, WM_SYSKEYUP = 0x105, WM_QUIT = 0x12;
+        public const uint LLKHF_EXTENDED = 0x01, LLKHF_INJECTED = 0x10, KEYEVENTF_EXTENDEDKEY = 0x1, KEYEVENTF_KEYUP = 0x2;
+        public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc fn, IntPtr hMod, uint threadId);
+        [DllImport("user32.dll")] public static extern bool UnhookWindowsHookEx(IntPtr hook);
+        [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr hook, int nCode, IntPtr wParam, IntPtr lParam);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr GetModuleHandle(string name);
+        [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")] public static extern int GetMessage(out MSG msg, IntPtr hWnd, uint min, uint max);
+        [DllImport("user32.dll")] public static extern bool PeekMessage(out MSG msg, IntPtr hWnd, uint min, uint max, uint remove);
+        [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+        [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+        [DllImport("user32.dll")] public static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        [StructLayout(LayoutKind.Sequential)] public struct KBDLLHOOKSTRUCT { public uint vkCode, scanCode, flags, time; public IntPtr dwExtraInfo; }
+        [StructLayout(LayoutKind.Sequential)] public struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public POINT pt; }
 
         public static bool ModifiersDown()
         {
@@ -726,10 +744,43 @@ namespace Pocketbrief
             return vk != 0;
         }
 
-        // 把按下的組合鍵轉成設定字串（設定視窗錄製快速鍵用）；不合用時回傳 null
-        public static string FromKeys(Keys keyData)
+        // 「前導鍵＋按鍵」組合（例如 `+1：按住 ` 再按 1）。RegisterHotKey 只接受 Ctrl/Alt/Shift/Win 當修飾鍵，
+        // 這種組合改由 KeyChordHook 攔截鍵盤實作。目前只開放 ` 當前導鍵
+        public static bool ParseChord(string s, out uint prefix, out uint vk)
         {
-            Keys k = keyData & Keys.KeyCode;
+            prefix = 0; vk = 0;
+            if (s == null) return false;
+            int i = s.IndexOf('+');
+            if (i <= 0 || i == s.Length - 1) return false;
+            string p = s.Substring(0, i).Trim();
+            if (p != "`" && p != "~") return false;
+            uint mods;
+            if (!ParseHotkey(s.Substring(i + 1).Trim(), out mods, out vk)) return false;
+            // 第二個鍵不能再帶修飾鍵、不能是 ` 本身，也不能是 Backspace／Tab／Enter／Esc 這類操作鍵
+            if (mods != Native.MOD_NOREPEAT || vk == 0xC0 || vk == 0x08 || vk == 0x09 || vk == 0x0D || vk == 0x1B) { vk = 0; return false; }
+            prefix = 0xC0;
+            return true;
+        }
+
+        public static bool IsValidHotkey(string s)
+        {
+            uint a, b;
+            return ParseHotkey(s, out a, out b) || ParseChord(s, out a, out b);
+        }
+
+        // 按住 ` 時按下的鍵 → 「`+鍵」設定字串；不合用時回傳 null
+        public static string FromChordKey(Keys keyData)
+        {
+            if ((keyData & Keys.Modifiers) != 0) return null;
+            string name = KeyName(keyData & Keys.KeyCode);
+            if (name == null) return null;
+            string result = "`+" + name;
+            uint p, v;
+            return ParseChord(result, out p, out v) ? result : null;
+        }
+
+        static string KeyName(Keys k)
+        {
             if (k == Keys.ControlKey || k == Keys.ShiftKey || k == Keys.Menu || k == Keys.LWin || k == Keys.RWin || k == Keys.None) return null;
             string name = null;
             if (k == Keys.Oemtilde) name = "`";
@@ -748,6 +799,15 @@ namespace Pocketbrief
             else if (k >= Keys.F1 && k <= Keys.F24) name = "F" + (1 + (k - Keys.F1));
             else if (k == Keys.Space) name = "Space";
             else name = k.ToString();
+            return name;
+        }
+
+        // 把按下的組合鍵轉成設定字串（設定視窗錄製快速鍵用）；不合用時回傳 null
+        public static string FromKeys(Keys keyData)
+        {
+            Keys k = keyData & Keys.KeyCode;
+            string name = KeyName(k);
+            if (name == null) return null;
             bool fkey = k >= Keys.F1 && k <= Keys.F24;
             var sb = new StringBuilder();
             if ((keyData & Keys.Control) != 0) sb.Append("Ctrl+");
@@ -1290,7 +1350,35 @@ namespace Pocketbrief
             Show();
             Activate();
             Native.SetForegroundWindow(Handle);
+            // 用 `+1 這類組合叫出時，Windows 不一定准許搶焦點（一般快速鍵有系統給的許可，攔截來的沒有）；
+            // 搶不到就借用前景視窗的輸入狀態再試一次
+            if (Native.GetForegroundWindow() != Handle) ForceForeground();
             list.Focus();
+            // 稍後再確認一次：還是沒搶到焦點的話，清單不能留在畫面上，否則打的代碼會跑進原本的視窗
+            var check = new System.Windows.Forms.Timer { Interval = 250 };
+            check.Tick += delegate
+            {
+                check.Stop(); check.Dispose();
+                if (Visible && Native.GetForegroundWindow() != Handle) Close0(false);
+            };
+            check.Start();
+        }
+
+        void ForceForeground()
+        {
+            // 不用「送出 Alt」的作法：萬一沒搶到，原視窗（例如 Word）會收到單按 Alt 而進入功能區快捷字母模式，
+            // 接著打的代碼會變成執行功能區指令
+            IntPtr fg = Native.GetForegroundWindow();
+            uint fgThread = fg == IntPtr.Zero ? 0 : Native.GetWindowThreadProcessId(fg, IntPtr.Zero);
+            uint me = Native.GetCurrentThreadId();
+            if (fgThread == 0 || fgThread == me || !Native.AttachThreadInput(me, fgThread, true)) return;
+            try
+            {
+                Native.BringWindowToTop(Handle);
+                Native.SetForegroundWindow(Handle);
+                Activate();
+            }
+            finally { Native.AttachThreadInput(me, fgThread, false); }
         }
 
         void PlaceNearCaret(IntPtr target)
@@ -1628,11 +1716,10 @@ namespace Pocketbrief
             var ok = new Button { Text = L.T("確定"), AutoSize = true, MinimumSize = new Size(Ui.P(96), Ui.P(34)) };
             ok.Click += delegate
             {
-                uint m, v;
-                if (!Settings.ParseHotkey(hotkey.Text, out m, out v)) { MessageBox.Show(this, L.T("叫出清單的快速鍵看不懂，請重新設定。"), Text); return; }
+                if (!Settings.IsValidHotkey(hotkey.Text)) { MessageBox.Show(this, L.T("叫出清單的快速鍵看不懂，請重新設定。"), Text); return; }
                 if (quickAdd.Text.Length > 0)
                 {
-                    if (!Settings.ParseHotkey(quickAdd.Text, out m, out v)) { MessageBox.Show(this, L.T("快速新增的快速鍵看不懂，請重新設定。"), Text); return; }
+                    if (!Settings.IsValidHotkey(quickAdd.Text)) { MessageBox.Show(this, L.T("快速新增的快速鍵看不懂，請重新設定。"), Text); return; }
                     if (string.Equals(quickAdd.Text, hotkey.Text, StringComparison.OrdinalIgnoreCase)) { MessageBox.Show(this, L.T("兩組快速鍵不能相同。"), Text); return; }
                 }
                 Result = s.Clone();
@@ -1670,7 +1757,7 @@ namespace Pocketbrief
             SetupHotkeyBox(quickAdd, s.QuickAddHotkey, true);
             int r = 0;
             tl.Controls.Add(Lbl(L.T("叫出範本清單")), 0, r); tl.Controls.Add(hotkey, 1, r++);
-            tl.Controls.Add(Hint(L.T("點一下格子，直接按下想用的組合鍵（例如 Ctrl+`、Ctrl+Shift+`、Alt+`、F9）。\n必須搭配 Ctrl 或 Alt（F1～F12 除外），避免打字時誤觸。")), 1, r++);
+            tl.Controls.Add(Hint(L.T("點一下格子，直接按下想用的組合鍵（例如 Ctrl+`、Alt+`、F9），\n或按住 ` 再按一個鍵（例如 `+1）。單獨一個鍵（F1～F12 除外）不能當快速鍵，避免打字時誤觸。")), 1, r++);
             tl.Controls.Add(Lbl(L.T("快速新增範本")), 0, r); tl.Controls.Add(quickAdd, 1, r++);
             tl.Controls.Add(Hint(L.T("在任何地方先反白一段文字，再按這組鍵，就會開啟「新增範本」並自動帶入反白的內容。\n在格子裡按 Backspace 可清除（停用此功能）。")), 1, r++);
 
@@ -1733,14 +1820,20 @@ namespace Pocketbrief
             box.ImeMode = ImeMode.Disable;
             box.ShortcutsEnabled = false;
             box.Text = value;
+            bool prefixHeld = false;   // 正按住 `：下一個鍵錄成「`+鍵」
             box.KeyDown += (o, e) =>
             {
                 if (e.KeyData == Keys.Escape || e.KeyData == Keys.Tab || e.KeyData == Keys.Enter) return;  // 保留關閉視窗、切換欄位的功能
                 e.SuppressKeyPress = true; e.Handled = true;
-                if (allowClear && (e.KeyData == Keys.Back || e.KeyData == Keys.Delete)) { box.Text = ""; return; }
-                string v = Settings.FromKeys(e.KeyData);
+                if (e.KeyData == Keys.Oemtilde) { prefixHeld = true; return; }
+                string v;
+                if (prefixHeld) v = Settings.FromChordKey(e.KeyData);
+                else if (allowClear && (e.KeyData == Keys.Back || e.KeyData == Keys.Delete)) { box.Text = ""; return; }
+                else v = Settings.FromKeys(e.KeyData);
                 if (v != null) box.Text = v;
             };
+            box.KeyUp += (o, e) => { if ((e.KeyData & Keys.KeyCode) == Keys.Oemtilde) prefixHeld = false; };
+            box.Leave += delegate { prefixHeld = false; };
             box.PreviewKeyDown += (o, e) => { e.IsInputKey = e.KeyData != Keys.Escape && e.KeyData != Keys.Tab; };
         }
 
@@ -2710,6 +2803,148 @@ namespace Pocketbrief
         public void Dispose() { DestroyHandle(); }
     }
 
+    // ───────────── 前導鍵組合（例如 `+1）的判斷邏輯 ─────────────
+    // 按下 ` 時先扣住不送出：
+    //   接著按到設定的鍵 → 觸發快速鍵（` 和那個鍵都不送出）
+    //   什麼都沒按就放開 → 補送一個 `，照常打字
+    //   按了其他鍵 → 先補送 `，再送出那個鍵，順序不變
+    // 按著 Shift／Ctrl／Alt／Win 時按 `（例如 ～、Ctrl+`）完全不攔。
+    // 這裡只做判斷、不碰系統，方便單獨測試；實際攔截與送鍵在 KeyChordHook。
+    sealed class ChordLogic
+    {
+        public const int Pass = 0, Eat = 1, EatTapPrefix = 2, EatReplay = 3, Fire = 4;
+
+        readonly uint[] prefixes, keys;
+        readonly int[] ids;
+        uint held;           // 目前按住（被扣住）的前導鍵，0 表示沒有
+        bool consumed;       // 這次按住期間已經觸發過或已補送過 `
+        uint swallowUp;      // 觸發鍵放開前的自動重複與放開都要吃掉，否則按久一點就會把 1 打進清單
+        uint lastPrefixTime;
+
+        public ChordLogic(uint[] prefixes, uint[] keys, int[] ids) { this.prefixes = prefixes; this.keys = keys; this.ids = ids; }
+
+        public uint HeldPrefix { get { return held; } }
+
+        // time：按鍵事件的時間戳（毫秒）；modifiers：當下是否按著 Shift/Ctrl/Alt/Win
+        public int OnKey(uint vk, bool down, uint time, bool modifiers, out int id)
+        {
+            id = 0;
+            if (swallowUp != 0 && vk == swallowUp) { if (!down) swallowUp = 0; return Eat; }
+            if (held != 0 && vk != held && unchecked(time - lastPrefixTime) > 1500)
+                held = 0;   // 按住的鍵一定會持續送出自動重複；很久沒消息表示放開的事件漏掉了（例如跳出 UAC 視窗），不要卡住
+            if (held == 0)
+            {
+                if (down && !modifiers && Array.IndexOf(prefixes, vk) >= 0) { held = vk; consumed = false; lastPrefixTime = time; return Eat; }
+                return Pass;
+            }
+            if (vk == held)
+            {
+                lastPrefixTime = time;
+                if (down) return Eat;                     // 自動重複
+                held = 0;
+                return consumed ? Eat : EatTapPrefix;     // 單獨按一下 ` → 補送
+            }
+            if (!down || consumed) return Pass;
+            for (int i = 0; i < keys.Length; i++)
+                if (prefixes[i] == held && keys[i] == vk && !modifiers)
+                {
+                    consumed = true; swallowUp = vk; id = ids[i];
+                    return Fire;
+                }
+            consumed = true;
+            return EatReplay;
+        }
+    }
+
+    // ───────────── 前導鍵組合的鍵盤攔截 ─────────────
+    // 只有設定了 `+1 這類組合時才會啟用。攔截在獨立的執行緒上跑：Windows 規定攔截程序要很快回應，
+    // 否則會默默把它移除，所以不能跟可能忙碌的主視窗執行緒擠在一起。觸發時送 WM_HOTKEY 給主程式，
+    // 走跟一般快速鍵相同的路徑。本程式自己送出的按鍵（貼上、補送的 `）一律放行。
+    sealed class KeyChordHook : IDisposable
+    {
+        readonly ChordLogic logic;
+        readonly IntPtr target;
+        Native.LowLevelKeyboardProc proc;   // 要留著參考，避免被記憶體回收
+        IntPtr hook;
+        volatile uint threadId;
+        volatile bool disposed;
+        uint prefixScan;   // 被扣住的 ` 的掃描碼，補送時沿用（有些輸入法看掃描碼）
+        Thread thread;
+
+        KeyChordHook(ChordLogic logic, IntPtr target) { this.logic = logic; this.target = target; }
+
+        // 安裝失敗回傳 null
+        public static KeyChordHook Start(ChordLogic logic, IntPtr target)
+        {
+            var h = new KeyChordHook(logic, target);
+            var ready = new ManualResetEvent(false);
+            h.thread = new Thread(() =>
+            {
+                Native.MSG msg;
+                Native.PeekMessage(out msg, IntPtr.Zero, 0, 0, 0);   // 先建立訊息佇列，之後 Dispose 送的結束訊息才收得到
+                h.threadId = Native.GetCurrentThreadId();
+                h.proc = h.HookProc;
+                h.hook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, h.proc, Native.GetModuleHandle(null), 0);
+                ready.Set();
+                if (h.hook == IntPtr.Zero) return;
+                // 主程式等太久已放棄（Dispose 過）時，不要留下沒人管的攔截
+                if (!h.disposed)
+                    while (Native.GetMessage(out msg, IntPtr.Zero, 0, 0) > 0) { }
+                Native.UnhookWindowsHookEx(h.hook);
+            });
+            h.thread.IsBackground = true;
+            h.thread.Name = "KeyChordHook";
+            h.thread.Start();
+            ready.WaitOne(3000);
+            if (h.hook == IntPtr.Zero) { h.Dispose(); return null; }
+            return h;
+        }
+
+        IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0)
+            {
+                var k = (Native.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.KBDLLHOOKSTRUCT));
+                int msg = wParam.ToInt32();
+                bool down = msg == Native.WM_KEYDOWN || msg == Native.WM_SYSKEYDOWN;
+                bool up = msg == Native.WM_KEYUP || msg == Native.WM_SYSKEYUP;
+                if ((k.flags & Native.LLKHF_INJECTED) == 0 && (down || up))
+                {
+                    uint prefix = logic.HeldPrefix;
+                    int id;
+                    int r = logic.OnKey(k.vkCode, down, k.time, Native.ModifiersDown(), out id);
+                    if (down && prefix == 0 && logic.HeldPrefix == k.vkCode) prefixScan = k.scanCode;
+                    if (r == ChordLogic.Fire) Native.PostMessage(target, Native.WM_HOTKEY, (IntPtr)id, IntPtr.Zero);
+                    else if (r == ChordLogic.EatTapPrefix) Send(k.vkCode, k.scanCode, false, true);
+                    else if (r == ChordLogic.EatReplay)
+                    {
+                        // 先補送 `，再重送這個鍵的按下（放開照常由系統送出），順序才會正確
+                        Send(prefix, prefixScan, false, true);
+                        Send(k.vkCode, k.scanCode, (k.flags & Native.LLKHF_EXTENDED) != 0, false);
+                    }
+                    if (r != ChordLogic.Pass) return (IntPtr)1;
+                }
+            }
+            return Native.CallNextHookEx(hook, nCode, wParam, lParam);
+        }
+
+        // 送出按下（withUp 時再送放開）
+        static void Send(uint vk, uint scan, bool extended, bool withUp)
+        {
+            uint ext = extended ? Native.KEYEVENTF_EXTENDEDKEY : 0;
+            Native.keybd_event((byte)vk, (byte)scan, ext, UIntPtr.Zero);
+            if (withUp) Native.keybd_event((byte)vk, (byte)scan, ext | Native.KEYEVENTF_KEYUP, UIntPtr.Zero);
+        }
+
+        public void Dispose()
+        {
+            disposed = true;
+            if (threadId != 0) Native.PostThreadMessage(threadId, Native.WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+            if (thread != null) thread.Join(1000);
+            thread = null; threadId = 0;
+        }
+    }
+
     // ───────────── 常駐程式本體（系統匣圖示） ─────────────
     class AppContext : ApplicationContext
     {
@@ -2867,28 +3102,49 @@ namespace Pocketbrief
             catch { }
         }
 
+        KeyChordHook chordHook;   // 只有設定了 `+1 這類組合時才會有
+
         void UnregisterHotkeys()
         {
             Native.UnregisterHotKey(hotkeyWnd.Handle, HotkeyId);
             Native.UnregisterHotKey(hotkeyWnd.Handle, QuickAddId);
+            if (chordHook != null) { chordHook.Dispose(); chordHook = null; }
         }
 
         void RegisterHotkey()
         {
             UnregisterHotkeys();
-            uint mods, vk;
+            uint mods, vk, prefix;
             hotkeyOk = false;
-            if (!Settings.ParseHotkey(Settings.Hotkey, out mods, out vk))
+            bool quickOk = Settings.QuickAddHotkey.Length == 0;
+            var chordPrefixes = new List<uint>(); var chordKeys = new List<uint>(); var chordIds = new List<int>();
+
+            if (Settings.ParseChord(Settings.Hotkey, out prefix, out vk)) { chordPrefixes.Add(prefix); chordKeys.Add(vk); chordIds.Add(HotkeyId); }
+            else if (!Settings.ParseHotkey(Settings.Hotkey, out mods, out vk))
                 tray.ShowBalloonTip(6000, L.T("快速鍵設定有誤"), L.T("請在「設定」重新指定叫出清單的快速鍵。"), ToolTipIcon.Error);
             else if (!Native.RegisterHotKey(hotkeyWnd.Handle, HotkeyId, mods, vk))
                 tray.ShowBalloonTip(6000, L.T("快速鍵被占用"), L.F("{0} 已被其他程式使用，請在「設定」改用別的組合。", Settings.Hotkey), ToolTipIcon.Error);
             else hotkeyOk = true;
 
-            if (Settings.QuickAddHotkey.Length > 0)
+            if (!quickOk)
             {
-                if (!Settings.ParseHotkey(Settings.QuickAddHotkey, out mods, out vk) || !Native.RegisterHotKey(hotkeyWnd.Handle, QuickAddId, mods, vk))
-                    tray.ShowBalloonTip(6000, L.T("快速新增的快速鍵無法使用"), L.F("{0} 設定有誤或已被其他程式使用，請在「設定」改用別的組合。", Settings.QuickAddHotkey), ToolTipIcon.Warning);
+                if (Settings.ParseChord(Settings.QuickAddHotkey, out prefix, out vk)) { chordPrefixes.Add(prefix); chordKeys.Add(vk); chordIds.Add(QuickAddId); quickOk = true; }
+                else quickOk = Settings.ParseHotkey(Settings.QuickAddHotkey, out mods, out vk) && Native.RegisterHotKey(hotkeyWnd.Handle, QuickAddId, mods, vk);
             }
+
+            if (chordKeys.Count > 0)
+            {
+                chordHook = KeyChordHook.Start(new ChordLogic(chordPrefixes.ToArray(), chordKeys.ToArray(), chordIds.ToArray()), hotkeyWnd.Handle);
+                if (chordHook != null) { if (chordIds.Contains(HotkeyId)) hotkeyOk = true; }
+                else
+                {
+                    if (chordIds.Contains(QuickAddId)) quickOk = false;
+                    if (chordIds.Contains(HotkeyId))
+                        tray.ShowBalloonTip(6000, L.T("快速鍵無法啟用"), L.F("{0} 無法啟用，請在「設定」改用別的組合。", Settings.Hotkey), ToolTipIcon.Error);
+                }
+            }
+            if (!quickOk && hotkeyOk)   // 叫出清單的快速鍵也壞掉時，已經跳過那則更重要的提示，不要蓋掉它
+                tray.ShowBalloonTip(6000, L.T("快速新增的快速鍵無法使用"), L.F("{0} 設定有誤或已被其他程式使用，請在「設定」改用別的組合。", Settings.QuickAddHotkey), ToolTipIcon.Warning);
             tray.Text = L.AppName + " (" + Settings.Hotkey + ")";
         }
 

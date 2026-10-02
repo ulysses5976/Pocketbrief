@@ -3,3 +3,7 @@
 *.cmd text eol=crlf
 *.csv text eol=crlf
 *.png binary
+*.swift text eol=lf
+*.sh text eol=lf
+*.plist text eol=lf
+*.yml text eol=lf

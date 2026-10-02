@@ -35,7 +35,7 @@ It was built by a litigation lawyer for party names and contract titles in court
 - ♾️ **No limits**: store as many templates as you like and use them on as many computers as you like.
 - ☁️ **Sync across computers**: keep the folder in Google Drive, OneDrive or Dropbox. Edit once and every computer gets the change.
 - 🔒 **Your data stays yours**: templates live in a CSV file next to the program. Pocketbrief never connects to the internet.
-- ⌨️ **Configurable hotkeys**: the default `Ctrl` + `` ` `` won't fire by accident while you type, and you can pick any other combination.
+- ⌨️ **Configurable hotkeys**: the default `Ctrl` + `` ` `` won't fire by accident while you type. You can also use "hold `` ` `` and press a key" (e.g. `` ` `` + `1`) for an even smaller left-hand move.
 - 🎨 **Customizable look**: choose the font, size, colors, width and number of rows of the pop-up list, or pick one of 10 built-in color themes, including two eye-friendly ones.
 - 🌙 **Dark mode**: follow Windows or choose light or dark yourself.
 - 🌐 **Four UI languages**: English, 日本語, 繁體中文, 简体中文.
@@ -113,6 +113,17 @@ Pocketbrief follows your Windows display language. To change it, open **Settings
 - When codes share a prefix (e.g. `a` and `aa`), typing `a` pauses the list. Press `Enter` to insert `a`, or keep typing.
 - Codes may contain letters, digits and half-width symbols, up to 20 characters, and are case-insensitive. Spaces, CJK characters and `` ` `` are not allowed.
 
+### Using `` ` `` as a hotkey prefix
+
+Besides `Ctrl`/`Alt` combinations, you can set a hotkey as "hold `` ` `` and press a key", e.g. `` ` `` + `1`, so your left hand doesn't have to reach for `Ctrl`. To set it, click the hotkey box in Settings, hold `` ` `` and press `1`.
+
+With a combination like this:
+
+- Tapping `` ` `` on its own still types `` ` ``; it just appears when you release the key, and holding it down doesn't repeat.
+- If you press another key while holding `` ` `` (e.g. `a`), you get "`` ` ``a" in order, so typing isn't affected.
+- `Shift` + `` ` `` (~), `Ctrl` + `` ` `` and similar combinations are unaffected.
+- If you type fast and hit `1` before releasing `` ` `` (e.g. typing `` `1` `` in Markdown), it counts as the hotkey.
+
 ### First run
 
 Try the sample library: in the Phrase Library, click **Import CSV…** and choose [`examples/sample-phrases-en.csv`](examples/sample-phrases-en.csv).
@@ -168,6 +179,7 @@ Email sign-off,z,"Best regards,
 - Your templates stay in the folder you choose.
 - To paste a phrase into the current window, Pocketbrief briefly borrows the clipboard and restores your original clipboard about one second later.
 - Because Pocketbrief registers global hotkeys and simulates `Ctrl` + `V` and `Ctrl` + `C`, a few antivirus products may flag it. The source code is fully public, so you can inspect or build it yourself.
+- If you set a hotkey like "`` ` `` + a key", Pocketbrief watches the keyboard so it can tell which key follows `` ` ``. It only checks for that combination; nothing you type is recorded or sent anywhere. With `Ctrl`/`Alt` combinations it doesn't watch the keyboard at all.
 
 ## Known limitations
 
@@ -188,7 +200,7 @@ Yes. When the list pops up, Pocketbrief switches the input method to plain lette
 <details>
 <summary><b>The hotkey conflicts with another program. What can I do?</b></summary>
 
-Open **Settings → Hotkeys & Behavior**, click the hotkey box and press the combination you want. Common system shortcuts such as `Ctrl` + `C` and `Ctrl` + `V` can't be used.
+Open **Settings → Hotkeys & Behavior**, click the hotkey box and press the combination you want. A "`` ` `` + a key" combination almost never clashes with other programs. Common system shortcuts such as `Ctrl` + `C` and `Ctrl` + `V` can't be used.
 </details>
 
 <details>
