@@ -251,8 +251,9 @@ final class ChordTap {
                                         userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return false }
         tap = t
         let ready = DispatchSemaphore(value: 0)
-        let th = Thread { [weak self] in
-            guard let self = self, let t = self.tap else { ready.signal(); return }
+        // 執行緒持有 self 直到結束：停止攔截後，正在處理中的按鍵事件不會碰到已釋放的物件
+        let th = Thread {
+            guard let t = self.tap else { ready.signal(); return }
             let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, t, 0)
             self.runLoop = CFRunLoopGetCurrent()
             CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)

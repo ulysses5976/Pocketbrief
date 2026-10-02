@@ -615,6 +615,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         finished = true
         NSColorPanel.shared.orderOut(nil)
         NotificationCenter.default.removeObserver(self)
-        onClose(closedWith)
+        // 視窗關閉的過程中不能立刻釋放這個控制器（onClose 會放掉它），延後一拍再處理
+        let result = closedWith, done = onClose
+        DispatchQueue.main.async { done(result) }
     }
 }

@@ -406,7 +406,9 @@ final class ManagerWindowController: NSWindowController, NSWindowDelegate, NSTab
         edCode.isEnabled = on
         edText.isEditable = on
         edText.isSelectable = on
-        edText.textColor = on ? .textColor : .secondaryLabelColor
+        let color: NSColor = on ? .textColor : .secondaryLabelColor
+        edText.textColor = color
+        edText.typingAttributes[.foregroundColor] = color   // 空白的編輯區也要換，否則新打的字會是灰色
     }
 
     private func fill(_ title: String, _ code: String, _ text: String) {

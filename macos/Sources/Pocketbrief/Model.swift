@@ -241,10 +241,10 @@ enum TextFile {
         for _ in 0..<6 {
             do {
                 try data.write(to: tmp)
-                if FileManager.default.fileExists(atPath: path) {
-                    _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
-                } else {
-                    try FileManager.default.moveItem(at: tmp, to: url)
+                // rename() 會一次換掉正式檔（同一個資料夾內一定是整檔替換）；
+                // 不用 replaceItemAt：雲端硬碟這類虛擬磁碟不一定支援
+                if rename(tmp.path, url.path) != 0 {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
                 }
                 return
             } catch {

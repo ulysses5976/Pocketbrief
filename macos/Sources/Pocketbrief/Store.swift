@@ -15,8 +15,11 @@ final class Store {
     private var loadedTime: Date?
     private var loadedLen: Int64 = -1
     private var everLoaded = false   // 這次執行是否成功讀過範本檔
+    // 只有使用者剛選好句庫資料夾時，才可以在裡面建立新的範本檔。
+    // 平常找不到範本檔，多半是雲端硬碟還在同步（例如剛開機）——這時建空檔，會把雲端上真正的句庫蓋掉。
+    var allowCreate = false
 
-    // 換了句庫資料夾：當作第一次讀取（新資料夾裡沒有範本檔時才會建立）
+    // 換了句庫資料夾：當作第一次讀取
     func reset() {
         items = []
         version += 1
@@ -42,12 +45,13 @@ final class Store {
                 // 讀過卻不見了，多半是雲端硬碟換檔的空窗；資料夾不存在則可能是路徑設錯。兩種都不能建空檔。
                 let dir = (path as NSString).deletingLastPathComponent
                 var isDir: ObjCBool = false
-                if everLoaded || dir.isEmpty || !FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) || !isDir.boolValue {
+                if everLoaded || !allowCreate || dir.isEmpty || !FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) || !isDir.boolValue {
                     error = L.t("找不到範本檔（可能正在同步），暫時沿用上次讀到的內容。") + "\n" + path
                     return error != prevError
                 }
                 try TextFile.write(path, Csv.write([]))
             }
+            allowCreate = false
             for _ in 0..<3 {
                 let before = Store.fileInfo(path)
                 if path == loadedPath && before.mtime == loadedTime && before.size == loadedLen && error == nil { return false }

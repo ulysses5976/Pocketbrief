@@ -67,6 +67,11 @@ final class PopupController: NSObject, NSWindowDelegate {
         place()
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(view)
+        // 稍後確認：沒拿到鍵盤焦點的話，清單不能留在畫面上，否則打的代碼會跑進原本的程式
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self = self, self.panel.isVisible, !self.panel.isKeyWindow else { return }
+            self.close(refocus: false)
+        }
     }
 
     // 放在游標（插入點）下方；取不到游標位置就放在滑鼠旁邊
@@ -284,10 +289,21 @@ final class PopupView: NSView {
         if event.clickCount >= 2 { c.commitSelected() }
     }
 
+    // 觸控板會送出一連串細小的捲動量：累積到一列的高度才捲一列；滑鼠滾輪每格捲一列
+    private var scrollAccum: CGFloat = 0
+
     override func scrollWheel(with event: NSEvent) {
         guard let c = controller else { return }
-        let d = event.scrollingDeltaY
-        if abs(d) < 0.5 { return }
-        c.scroll(d > 0 ? -1 : 1)
+        if !event.hasPreciseScrollingDeltas {
+            if abs(event.scrollingDeltaY) >= 0.5 { c.scroll(event.scrollingDeltaY > 0 ? -1 : 1) }
+            return
+        }
+        if event.phase == .began { scrollAccum = 0 }
+        scrollAccum += event.scrollingDeltaY
+        let step = c.metrics.rowH
+        while abs(scrollAccum) >= step {
+            c.scroll(scrollAccum > 0 ? -1 : 1)
+            scrollAccum -= scrollAccum > 0 ? step : -step
+        }
     }
 }

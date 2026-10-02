@@ -44,7 +44,11 @@ final class AppController: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { Permissions.explainAccessibility() }
         }
         if CommandLine.arguments.contains("--manage") { showManager() }
+        // 定期檢查設定檔：開機時雲端硬碟可能還沒同步好，或別台 Mac 改了設定
+        settingsWatch = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.reloadSettingsIfChanged() }
     }
+
+    private var settingsWatch: Timer?
 
     // 同時只執行一份；重新啟動時（--restart）等前一份結束
     private func ensureSingleInstance() -> Bool {
@@ -70,6 +74,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         if Settings.dataFolder != nil { return true }
         guard let f = DataFolderChooser.choose() else { return false }
         Settings.dataFolder = f
+        store.allowCreate = true   // 剛選好的資料夾裡還沒有範本檔時，建立一個新的
         settings = Settings.load() ?? Settings()
         L.initialize(settings.language)
         applyAppearance()
@@ -148,7 +153,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 if ci.contains(AppController.quickAddId) { quickOk = false }
                 if ci.contains(AppController.hotkeyId) {
                     problem = (L.t("快速鍵無法啟用"),
-                               L.f("{0} 需要「輸入監控」權限。請到「系統設定」→「隱私權與安全性」→「輸入監控」打開 Pocketbrief，再重新啟動程式。", Hotkey.display(settings.hotkey)))
+                               L.f("{0} 需要「輔助使用」和「輸入監控」權限。請到「系統設定」→「隱私權與安全性」，在這兩個項目裡打開 Pocketbrief，再重新啟動程式。", Hotkey.display(settings.hotkey)))
                 }
             }
         }
@@ -213,13 +218,20 @@ final class AppController: NSObject, NSApplicationDelegate {
         manager?.present()
     }
 
+    // 視窗關閉的過程中不能立刻釋放它的控制器，延後一拍再放掉
     func managerDidClose() {
-        manager = nil
-        DispatchQueue.main.async { [weak self] in self?.updateActivationPolicy() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if let m = self.manager, m.window?.isVisible != true { self.manager = nil }   // 這一拍之間又被打開的話就保留
+            self.updateActivationPolicy()
+        }
     }
 
     func openSettings() {
-        if let wc = settingsWC { wc.present(); return }
+        if let wc = settingsWC {   // 已經開著（或正在關閉）：不要再開第二個
+            if wc.window?.isVisible == true { wc.present() }
+            return
+        }
         reloadSettingsIfChanged()
         unregisterHotkeys()   // 錄製快速鍵時不要被自己攔截
         let origLang = settings.language
@@ -243,16 +255,26 @@ final class AppController: NSObject, NSApplicationDelegate {
         // 登入時自動啟動（每台 Mac 各自設定）
         do {
             let svc = SMAppService.mainApp
-            if r.launchAtLogin && svc.status != .enabled { try svc.register() }
-            if !r.launchAtLogin && svc.status == .enabled { try svc.unregister() }
+            if r.launchAtLogin && svc.status != .enabled {
+                try svc.register()
+                // 有些情況 macOS 要使用者到「登入項目」核准
+                if svc.status == .requiresApproval {
+                    if Alerts.show(L.t("請在「系統設定」→「一般」→「登入項目」允許 Pocketbrief，登入時才會自動啟動。"),
+                                   buttons: [L.t("開啟系統設定"), L.t("稍後")]) == 0 {
+                        SMAppService.openSystemSettingsLoginItems()
+                    }
+                }
+            }
+            if !r.launchAtLogin && svc.status != .notRegistered && svc.status != .notFound { try svc.unregister() }
         } catch {
             Alerts.show(L.t("無法設定登入時自動啟動：") + error.localizedDescription, style: .warning)
         }
 
-        // 句庫資料夾變更：改讀新資料夾的範本檔，設定也存到新資料夾
+        // 句庫資料夾變更：改讀新資料夾的範本檔（沒有就建立），設定也存到新資料夾
         if !r.folder.isEmpty && r.folder != Settings.dataFolder {
             Settings.dataFolder = r.folder
             store.reset()
+            store.allowCreate = true
             iniTime = nil
         }
 

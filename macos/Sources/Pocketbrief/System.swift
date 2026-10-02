@@ -61,7 +61,12 @@ enum Caret {
         guard AXValueGetValue(b as! AXValue, .cgRect, &r), r.height > 0 || r.width > 0 else { return nil }
         // 輔助使用的座標原點在主螢幕左上角，往下為正；換成 Cocoa 座標
         guard let primary = NSScreen.screens.first else { return nil }
-        return NSRect(x: r.minX, y: primary.frame.maxY - r.maxY, width: r.width, height: r.height)
+        let rect = NSRect(x: r.minX, y: primary.frame.maxY - r.maxY, width: r.width, height: r.height)
+        // 有些程式回報的位置不可靠（例如全是 0、在螢幕外、或整段選取範圍）：不合理就改放在滑鼠旁邊
+        if rect.height > 200 || rect.width > 2000 { return nil }
+        if !NSScreen.screens.contains(where: { $0.frame.contains(NSPoint(x: rect.minX, y: rect.midY)) }) { return nil }
+        if r.minX == 0 && r.minY == 0 { return nil }
+        return rect
     }
 }
 
