@@ -5,6 +5,14 @@ dist/
 # Personal data created next to the exe at run time -- never commit these
 範本.csv
 設定.ini
+設定-Mac.ini
 備份/
 *.saving
 *.bak
+
+# macOS build
+macos/.build/
+macos/.swiftpm/
+macos/build.log
+macos/errors.txt
+.DS_Store

@@ -1,0 +1,55 @@
+name: macOS build
+
+on:
+  push:
+    paths:
+      - "macos/**"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Pocketbrief.app
+        working-directory: macos
+        run: |
+          set -o pipefail
+          bash build.sh 2>&1 | tee build.log
+
+      # 編譯失敗時把錯誤訊息轉成註記（每個步驟最多顯示 10 則，所以分三段）
+      - name: Compiler errors 1-10
+        if: failure()
+        working-directory: macos
+        run: |
+          grep -E ':[0-9]+:[0-9]+: error:' build.log | sort -u > errors.txt || true
+          sed -n '1,10p' errors.txt | while IFS= read -r line; do
+            f="${line%%:*}"; rest="${line#*:}"; l="${rest%%:*}"
+            echo "::error file=${f#$GITHUB_WORKSPACE/},line=$l::${line#*error: }"
+          done
+      - name: Compiler errors 11-20
+        if: failure()
+        working-directory: macos
+        run: |
+          sed -n '11,20p' errors.txt | while IFS= read -r line; do
+            f="${line%%:*}"; rest="${line#*:}"; l="${rest%%:*}"
+            echo "::error file=${f#$GITHUB_WORKSPACE/},line=$l::${line#*error: }"
+          done
+      - name: Compiler errors 21-30
+        if: failure()
+        working-directory: macos
+        run: |
+          sed -n '21,30p' errors.txt | while IFS= read -r line; do
+            f="${line%%:*}"; rest="${line#*:}"; l="${rest%%:*}"
+            echo "::error file=${f#$GITHUB_WORKSPACE/},line=$l::${line#*error: }"
+          done
+          echo "total errors: $(wc -l < errors.txt)"
+
+      - name: Upload app
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pocketbrief-mac
+          path: macos/dist/*.zip
