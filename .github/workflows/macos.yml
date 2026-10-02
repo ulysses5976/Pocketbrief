@@ -2,6 +2,7 @@ name: macOS build
 
 on:
   push:
+    branches: ["**"]   # 只在推送分支時編譯；版本標籤由 release.yml 處理
     paths:
       - "macos/**"
       - ".github/workflows/macos.yml"

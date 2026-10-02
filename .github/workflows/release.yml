@@ -1,0 +1,61 @@
+# 推送版本標籤（例如 v4.3.0）時：同時編譯 Windows 版與 Mac 版，建立 GitHub Release 並附上兩個 zip。
+# 發布說明取自 docs/release-notes/<標籤>.md。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Pocketbrief.exe
+        shell: cmd
+        run: call build.cmd /nopause
+      - name: Package
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist\Pocketbrief.exe)) { throw "build failed" }
+          New-Item -ItemType Directory stage | Out-Null
+          Copy-Item dist\Pocketbrief.exe, LICENSE, README.md, README.en.md stage
+          Copy-Item examples\*.csv stage
+          Compress-Archive -Path stage\* -DestinationPath "Pocketbrief-${{ github.ref_name }}-windows.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Pocketbrief-*-windows.zip
+
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Pocketbrief.app
+        run: bash macos/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: macos/dist/*.zip
+
+  release:
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l out
+          gh release create "$GITHUB_REF_NAME" out/*.zip \
+            --title "口袋句庫 Pocketbrief $GITHUB_REF_NAME" \
+            --notes-file "docs/release-notes/$GITHUB_REF_NAME.md" \
+            --latest
