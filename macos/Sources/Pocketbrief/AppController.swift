@@ -3,7 +3,7 @@
 import AppKit
 import ServiceManagement
 
-let appVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "4.3.0"
+let appVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "4.3.1"
 
 final class AppController: NSObject, NSApplicationDelegate {
     var settings = Settings()

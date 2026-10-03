@@ -19,8 +19,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("常用句子範本：按快速鍵叫出清單，打代碼即可輸出")]
 [assembly: System.Reflection.AssemblyCompany("無名小律師（楊朝淵律師）")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright © 2026 無名小律師（楊朝淵律師） · MIT License")]
-[assembly: System.Reflection.AssemblyVersion("4.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("4.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("4.3.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("4.3.1.0")]
 
 namespace Pocketbrief
 {
