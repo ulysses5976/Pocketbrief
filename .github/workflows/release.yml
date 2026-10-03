@@ -1,5 +1,5 @@
-# 推送版本標籤（例如 v4.3.0）時：同時編譯 Windows 版與 Mac 版，建立 GitHub Release 並附上兩個 zip。
-# 發布說明取自 docs/release-notes/<標籤>.md。
+# 推送版本標籤（例如 v4.3.0）時：先檢查版本號與發布說明，再同時編譯 Windows 版與 Mac 版，
+# 建立 GitHub Release 並附上兩個 zip。發布說明取自 docs/release-notes/<標籤>.md。
 name: Release
 
 on:
@@ -7,10 +7,26 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read     # 編譯只需要讀；只有 release job 需要寫入
 
 jobs:
+  # 先花幾秒檢查，避免兩個平台都編完了才在最後一步失敗
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version numbers and release notes
+        run: |
+          tag="$GITHUB_REF_NAME"; ver="${tag#v}"
+          notes="docs/release-notes/$tag.md"
+          [ -f "$notes" ] || { echo "::error::缺少發布說明 $notes"; exit 1; }
+          mac="$(tr -d '[:space:]' < macos/VERSION)"
+          [ "$mac" = "$ver" ] || { echo "::error::標籤 $tag 與 macos/VERSION（$mac）不一致"; exit 1; }
+          grep -q "AssemblyVersion(\"$ver.0\")" src/Pocketbrief.cs || { echo "::error::src/Pocketbrief.cs 的 AssemblyVersion 不是 $ver.0"; exit 1; }
+          echo "版本一致：$ver"
+
   windows:
+    needs: check
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +39,7 @@ jobs:
           if (-not (Test-Path dist\Pocketbrief.exe)) { throw "build failed" }
           New-Item -ItemType Directory stage | Out-Null
           Copy-Item dist\Pocketbrief.exe, LICENSE, README.md, README.en.md stage
-          Copy-Item examples\*.csv stage
+          Copy-Item examples -Recurse stage     # 保留 examples/ 路徑，和 README 的說明一致
           Compress-Archive -Path stage\* -DestinationPath "Pocketbrief-${{ github.ref_name }}-windows.zip"
       - uses: actions/upload-artifact@v4
         with:
@@ -31,11 +47,12 @@ jobs:
           path: Pocketbrief-*-windows.zip
 
   mac:
+    needs: check
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - name: Build Pocketbrief.app
-        run: bash macos/build.sh
+        run: bash macos/build.sh       # zip 內含 app、LICENSE、README、examples/
       - uses: actions/upload-artifact@v4
         with:
           name: mac
@@ -44,6 +61,8 @@ jobs:
   release:
     needs: [windows, mac]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 建立 Release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

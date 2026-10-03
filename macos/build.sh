@@ -23,5 +23,16 @@ rm -rf dist/AppIcon.iconset
 # 沒有 Apple 開發者簽章：用「臨時簽章」，Apple 晶片的 Mac 才能執行
 codesign --force --deep --sign - "$APP"
 
-(cd dist && ditto -c -k --keepParent Pocketbrief.app "Pocketbrief-v$VERSION-mac.zip")
+# 下載檔要自給自足：MIT 授權要求散布時附上授權聲明；README 叫使用者匯入的範例檔也要一起附
+STAGE="dist/package"
+mkdir -p "$STAGE"
+cp -R "$APP" "$STAGE/"
+for f in ../LICENSE ../README.md ../README.en.md; do
+  if [ -f "$f" ]; then cp "$f" "$STAGE/"; fi
+done
+if [ -d ../examples ]; then cp -R ../examples "$STAGE/"; fi
+
+# 用 ditto 壓縮才會保留 .app 的權限與簽章；不加 --keepParent，zip 根目錄就是 app 與說明檔
+ditto -c -k "$STAGE" "dist/Pocketbrief-v$VERSION-mac.zip"
+rm -rf "$STAGE"
 echo "Done: macos/dist/Pocketbrief-v$VERSION-mac.zip"

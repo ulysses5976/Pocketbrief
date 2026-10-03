@@ -43,7 +43,7 @@ It was built by a litigation lawyer for party names and contract titles in court
 - 🌙 **Dark mode**: follow the system or choose light or dark yourself.
 - 🌐 **Four UI languages**: English, 日本語, 繁體中文, 简体中文.
 - 📥 **CSV import/export**: bring templates over from other tools or back them up anywhere.
-- 🛡️ **Safe saving**: every save goes through a temporary file, so you never end up with a half-written file. A backup is also made automatically before the first change of each day, and the last 14 days are kept.
+- 🛡️ **Safe saving**: every save goes through a temporary file, so you never end up with a half-written file. A backup is also made automatically before the first change on any day you edit, and the 14 most recent backups are kept.
 
 ## Screenshots
 
@@ -180,7 +180,7 @@ The folder contains these files (the file names are in Chinese; this is expected
 | `範本.csv` | All your templates (shared by Windows and Mac) |
 | `設定.ini` | Windows settings (hotkeys, appearance, language and so on) |
 | `設定-Mac.ini` | Mac settings (kept separate because hotkeys are written differently) |
-| `備份\` | Daily automatic backups (last 14 days) |
+| `備份\` | Automatic backups (one per day you make changes; the 14 most recent are kept) |
 
 A change made on one computer shows up on the others the next time you open the list.
 

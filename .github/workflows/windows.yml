@@ -1,0 +1,43 @@
+# 推送分支時編譯 Windows 版（Mac 版由 macos.yml 負責），讓改壞的程式在推版本標籤前就被發現。
+# 失敗時把 C# 編譯錯誤轉成註記（公開 repo 可免登入讀取）。
+name: Windows build
+
+on:
+  push:
+    branches: ["**"]   # 只在推送分支時編譯；版本標籤交給 release.yml
+    paths:
+      - "src/**"
+      - "build.cmd"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmd /c "call build.cmd /nopause" 2>&1 | Tee-Object -FilePath build.log
+          if (-not (Test-Path dist\Pocketbrief.exe)) { throw "build failed" }
+
+      # C# 錯誤格式：path(line,col): error CS1234: message
+      - name: Compiler errors
+        if: failure()
+        shell: pwsh
+        run: |
+          $errs = Select-String -Path build.log -Pattern '^(.+?)\((\d+),\d+\): error (CS\d+: .*)$' | Select-Object -First 10
+          foreach ($e in $errs) {
+            $f = $e.Matches[0].Groups[1].Value.Replace("$env:GITHUB_WORKSPACE\", '').Replace('\', '/'); $l = $e.Matches[0].Groups[2].Value; $m = $e.Matches[0].Groups[3].Value
+            Write-Output "::error file=$f,line=$l::$m"
+          }
+          if (-not $errs) { Get-Content build.log -Tail 8 | ForEach-Object { Write-Output "::error::$_" } }
+
+      - name: Upload exe
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pocketbrief-windows
+          path: dist/Pocketbrief.exe
