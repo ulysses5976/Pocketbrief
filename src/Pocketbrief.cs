@@ -141,6 +141,21 @@ namespace Pocketbrief
         [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT p);
         [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
         [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
+        [DllImport("user32.dll")] public static extern bool OpenClipboard(IntPtr owner);
+        [DllImport("user32.dll")] public static extern bool CloseClipboard();
+        [DllImport("user32.dll")] public static extern bool EmptyClipboard();
+        [DllImport("user32.dll")] public static extern uint EnumClipboardFormats(uint format);
+        [DllImport("user32.dll")] public static extern IntPtr GetClipboardData(uint format);
+        [DllImport("user32.dll")] public static extern IntPtr SetClipboardData(uint format, IntPtr mem);
+        [DllImport("user32.dll")] public static extern IntPtr GetClipboardOwner();
+        [DllImport("user32.dll")] public static extern IntPtr GetOpenClipboardWindow();
+        [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern uint RegisterClipboardFormat(string name);
+        [DllImport("kernel32.dll")] public static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+        [DllImport("kernel32.dll")] public static extern IntPtr GlobalLock(IntPtr h);
+        [DllImport("kernel32.dll")] public static extern bool GlobalUnlock(IntPtr h);
+        [DllImport("kernel32.dll")] public static extern UIntPtr GlobalSize(IntPtr h);
+        [DllImport("kernel32.dll")] public static extern IntPtr GlobalFree(IntPtr h);
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
         [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr h);
         [DllImport("imm32.dll")] public static extern uint ImmGetVirtualKey(IntPtr hWnd);
@@ -157,6 +172,8 @@ namespace Pocketbrief
         [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
         [DllImport("user32.dll")] public static extern int GetMessage(out MSG msg, IntPtr hWnd, uint min, uint max);
         [DllImport("user32.dll")] public static extern bool PeekMessage(out MSG msg, IntPtr hWnd, uint min, uint max, uint remove);
+        public const uint QS_SENDMESSAGE = 0x40, PM_QS_SENDMESSAGE = QS_SENDMESSAGE << 16;
+        [DllImport("user32.dll")] public static extern uint MsgWaitForMultipleObjects(uint count, IntPtr[] handles, bool waitAll, uint ms, uint wakeMask);
         [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
         [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
         [DllImport("user32.dll")] public static extern bool PostThreadMessage(uint threadId, uint msg, IntPtr wParam, IntPtr lParam);
@@ -1067,21 +1084,85 @@ namespace Pocketbrief
     // ───────────── 輸出到目標視窗 ─────────────
     static class Paster
     {
-        class ClipBackup { public DataObject Data; public bool WasEmpty; }
+        // 備份的是剪貼簿裡每種格式的原始位元組（依原本的順序），還原時原封不動放回。
+        // 不經過 .NET 的 DataObject：它讀寫「HTML Format」時編碼會轉錯，網頁、Word 複製來的中文還原後變成亂碼。
+        class ClipBackup { public List<KeyValuePair<uint, byte[]>> Items; public bool WasEmpty; }
 
         // 尚未還原的剪貼簿備份。連續輸出兩次時要沿用「最早」那份，
         // 否則第二次備份到的會是第一次輸出的範本，使用者原本的剪貼簿就永久不見了。
         static ClipBackup pending;
-        static uint pendingSeq;
         static System.Windows.Forms.Timer pendingTimer;
-        const int RestoreDelayMs = 1200;   // 給目標程式（含遠端桌面等較慢的程式）足夠時間讀取剪貼簿
+
+        // 何時把使用者原本的剪貼簿放回去：
+        //   ‧範本用「延遲提供」放進剪貼簿：先只登記有文字，等程式真的來讀時才交出內容（OnRender）。
+        //     送出 Ctrl+V 之後由目標程式讀走，就表示貼上了，稍等一下即可放回。
+        //   ‧放回之前使用者自己按 Ctrl+V（或 Shift+Insert），由 PasteGuard 攔下，先放回再讓它生效（OnUserPaste），
+        //     所以這裡的等待寧可保守：太早放回，範本自己會貼成使用者原本的內容。
+        //   ‧看不出有沒有貼上（別的程式代讀、或一直沒人讀）時，照舊等 RestoreDelayMs；
+        //     完全沒有程式讀過範本表示目標程式還沒貼（例如正忙著），再多等一下，最多 MaxWaitMs。
+        static string renderText;        // 還沒交出的範本內容
+        static uint renderTargetPid;     // 輸出到的程式；由它讀走才算貼上（剪貼簿紀錄等其他程式來讀不算）
+        static bool keySent;             // 已送出輸出用的 Ctrl+V；在這之前來讀的一定不是貼上
+        static int keySentTick;
+        static bool rendered;            // 範本已經被（任何程式）讀過
+        static bool readByTarget;
+        static uint templateSeq;         // 剪貼簿仍是範本時的序號；變了表示使用者又複製了別的東西
+        const int RestoreDelayMs = 1200;
+        const int MaxWaitMs = 5000;
+        const int RestoreAfterReadMs = 300;   // 目標程式讀走範本後再等一下：同一次貼上可能分幾次讀（例如 Obsidian 等以 Chrome 為核心的程式）
+        const int UserPasteMinGapMs = 150;    // 使用者按貼上時，若還看不出目標程式讀過範本，至少等輸出的 Ctrl+V 送出這麼久才放回
+        const uint CF_UNICODETEXT = 13;
+        const int WM_RENDERFORMAT = 0x0305, WM_RENDERALLFORMATS = 0x0306;
+        const int WM_USER_PASTE = 0x8000 + 0x51;   // PasteGuard 通知：使用者按了貼上（wParam＝按鍵）
 
         // 只備份常見格式：逐一取出所有格式會逼來源程式產生大量資料（例如 Excel 大範圍），而且有些格式無法還原
-        static readonly HashSet<string> KeepFormats = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        // （點陣圖、中繼檔等是 GDI 物件，不是一塊記憶體；點陣圖改備份 DIB，Windows 會自動轉回點陣圖）
+        static HashSet<uint> keepFormats;
+        static HashSet<uint> KeepFormats()
         {
-            DataFormats.UnicodeText, DataFormats.Text, DataFormats.OemText, DataFormats.Locale, DataFormats.Rtf,
-            DataFormats.Html, DataFormats.CommaSeparatedValue, DataFormats.FileDrop, DataFormats.Bitmap, DataFormats.Dib, "PNG"
-        };
+            if (keepFormats == null)
+            {
+                // CF_TEXT、CF_OEMTEXT、CF_DIB、CF_UNICODETEXT、CF_HDROP（檔案）、CF_LOCALE、CF_DIBV5
+                keepFormats = new HashSet<uint> { 1, 7, 8, 13, 15, 16, 17 };
+                foreach (string name in new[] { "Rich Text Format", "HTML Format", "CSV", "PNG", "Preferred DropEffect" })
+                {
+                    uint id = Native.RegisterClipboardFormat(name);
+                    if (id != 0) keepFormats.Add(id);
+                }
+            }
+            return keepFormats;
+        }
+        const long MaxFormatBytes = 256L * 1024 * 1024;   // 單一格式超過這個大小就不備份（避免記憶體不足）
+        const uint GMEM_MOVEABLE = 2;
+
+        // 清空剪貼簿再放資料時，必須以某個視窗的名義開啟，否則放不進去；用一個看不見的訊息視窗。
+        // 它同時負責在程式來讀範本時交出內容。
+        class ClipWindow : NativeWindow
+        {
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == WM_RENDERFORMAT) { OnRender((uint)m.WParam.ToInt64()); m.Result = IntPtr.Zero; return; }
+                if (m.Msg == WM_RENDERALLFORMATS) { OnRenderAll(); m.Result = IntPtr.Zero; return; }
+                if (m.Msg == WM_USER_PASTE) { OnUserPaste((uint)m.WParam.ToInt64()); return; }
+                base.WndProc(ref m);
+            }
+        }
+        static ClipWindow clipOwner;
+
+        static bool OpenClip()
+        {
+            if (clipOwner == null)
+            {
+                clipOwner = new ClipWindow();
+                clipOwner.CreateHandle(new CreateParams { Parent = (IntPtr)(-3) });   // HWND_MESSAGE
+            }
+            for (int i = 0; i < 10; i++)   // 其他程式正在用剪貼簿時稍等再試
+            {
+                if (Native.OpenClipboard(clipOwner.Handle)) return true;
+                Thread.Sleep(30);
+            }
+            return false;
+        }
 
         const byte VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
         const uint KEYUP = 2;
@@ -1096,7 +1177,7 @@ namespace Pocketbrief
                 bool any = false;
                 foreach (int k in keys) if ((Native.GetAsyncKeyState(k) & 0x8000) != 0) any = true;
                 if (!any) return;
-                Thread.Sleep(15);
+                WaitHandlingSentMessages(15);
             }
             foreach (int k in keys)
                 if ((Native.GetAsyncKeyState(k) & 0x8000) != 0) Native.keybd_event((byte)k, 0, KEYUP, UIntPtr.Zero);
@@ -1110,24 +1191,117 @@ namespace Pocketbrief
             Native.keybd_event(VK_CONTROL, 0, KEYUP, UIntPtr.Zero);
         }
 
+        // 等待期間仍處理其他程式「送來」的訊息（例如來讀範本的要求，才分得出是在 Ctrl+V 送出前來讀的），
+        // 但不處理按鍵、計時器等一般訊息，以免在輸出途中又觸發別的動作
+        static void WaitHandlingSentMessages(int ms)
+        {
+            int end = Environment.TickCount + ms;
+            for (;;)
+            {
+                Native.MSG msg;
+                Native.PeekMessage(out msg, IntPtr.Zero, 0, 0, Native.PM_QS_SENDMESSAGE);   // 取看的同時會處理送來的訊息
+                int left = end - Environment.TickCount;
+                if (left <= 0) return;
+                Native.MsgWaitForMultipleObjects(0, null, false, (uint)left, Native.QS_SENDMESSAGE);
+            }
+        }
+
         public static void Paste(IntPtr target, string text, bool restore)
         {
             ClipBackup backup = restore ? TakePendingOrBackup() : null;
-            try { Clipboard.SetDataObject(text.Replace("\n", "\r\n"), true, 10, 50); }
-            catch
+            uint pid = 0;
+            if (target != IntPtr.Zero) Native.GetWindowThreadProcessId(target, out pid);
+            // 不還原剪貼簿時範本要留在剪貼簿裡，直接放內容即可
+            if (!PutTemplate(text.Replace("\n", "\r\n"), backup != null, pid))
             {
                 if (backup != null) Restore(backup);
                 MessageBox.Show(L.T("剪貼簿被其他程式占用，請再試一次。"), L.AppName);
                 return;
             }
-            uint seq = Native.GetClipboardSequenceNumber();
 
             if (target != IntPtr.Zero && Native.IsWindow(target)) Native.SetForegroundWindow(target);
-            Thread.Sleep(80);
+            WaitHandlingSentMessages(80);
             ReleaseStrayModifiers(600);
             SendCtrl(0x56);   // V
+            keySent = true; keySentTick = Environment.TickCount;
 
-            if (backup != null) ScheduleRestore(backup, seq);
+            if (backup != null) ScheduleRestore(backup);
+        }
+
+        // 把範本放進剪貼簿。delayed 時先只登記格式，內容等程式來讀時才交出（見 OnRender）
+        static bool PutTemplate(string text, bool delayed, uint targetPid)
+        {
+            if (!OpenClip()) return false;
+            try
+            {
+                if (!Native.EmptyClipboard()) return false;
+                renderText = delayed ? text : null;
+                renderTargetPid = targetPid;
+                keySent = false; rendered = false; readByTarget = false;
+                if (delayed)
+                {
+                    Native.SetClipboardData(CF_UNICODETEXT, IntPtr.Zero);
+                    // 暫借的範本請剪貼簿紀錄、雲端剪貼簿、剪貼簿管理工具略過：
+                    // 它們若搶先讀走範本，就看不出目標程式何時貼上，只能等滿 RestoreDelayMs；範本也不必留在紀錄裡
+                    foreach (string name in new[] { "ExcludeClipboardContentFromMonitorProcessing", "Clipboard Viewer Ignore",
+                                                    "CanIncludeInClipboardHistory", "CanUploadToCloudClipboard" })
+                    {
+                        uint id = Native.RegisterClipboardFormat(name);
+                        if (id != 0) SetBytes(id, new byte[4]);   // 後兩者的值 0 表示「不要」；前兩者只看有沒有
+                    }
+                }
+                else if (!SetUnicodeText(text)) return false;
+            }
+            finally { Native.CloseClipboard(); }
+            templateSeq = Native.GetClipboardSequenceNumber();
+            return true;
+        }
+
+        // 剪貼簿必須已經開著
+        static bool SetUnicodeText(string text)
+        {
+            var bytes = new byte[(text.Length + 1) * 2];
+            Encoding.Unicode.GetBytes(text, 0, text.Length, bytes, 0);
+            return SetBytes(CF_UNICODETEXT, bytes);
+        }
+
+        // 剪貼簿必須已經開著
+        static bool SetBytes(uint format, byte[] data)
+        {
+            IntPtr h = Native.GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)(ulong)data.Length);
+            if (h == IntPtr.Zero) return false;
+            IntPtr p = Native.GlobalLock(h);
+            if (p == IntPtr.Zero) { Native.GlobalFree(h); return false; }
+            Marshal.Copy(data, 0, p, data.Length);
+            Native.GlobalUnlock(h);
+            if (Native.SetClipboardData(format, h) == IntPtr.Zero) { Native.GlobalFree(h); return false; }   // 成功時記憶體歸系統管，不能釋放
+            return true;
+        }
+
+        // 有程式來讀範本：交出內容（此時剪貼簿由讀取的程式開著，不能也不必再開）
+        static void OnRender(uint format)
+        {
+            if (format != CF_UNICODETEXT || renderText == null) return;
+            uint before = Native.GetClipboardSequenceNumber();
+            SetUnicodeText(renderText);
+            if (before == templateSeq) templateSeq = Native.GetClipboardSequenceNumber();   // 交出內容本身不算使用者複製了新東西
+            rendered = true;
+
+            // 內容交出後會留在剪貼簿，之後再讀不會再來要；所以只有「第一次」來讀的若正是貼上，才看得出貼上了
+            uint pid = 0;
+            IntPtr reader = Native.GetOpenClipboardWindow();
+            if (reader != IntPtr.Zero) Native.GetWindowThreadProcessId(reader, out pid);
+            if (!keySent || readByTarget || pid == 0 || pid != renderTargetPid) return;
+            readByTarget = true;
+            if (pendingTimer != null) { pendingTimer.Stop(); pendingTimer.Interval = RestoreAfterReadMs; pendingTimer.Start(); }
+        }
+
+        // 本程式結束時還有範本沒交出：把內容放進去，免得剪貼簿留下一個讀不到內容的空殼
+        static void OnRenderAll()
+        {
+            if (renderText == null || !Native.OpenClipboard(clipOwner.Handle)) return;
+            try { if (Native.GetClipboardOwner() == clipOwner.Handle) SetUnicodeText(renderText); }
+            finally { Native.CloseClipboard(); }
         }
 
         static ClipBackup TakePendingOrBackup()
@@ -1135,19 +1309,28 @@ namespace Pocketbrief
             if (pendingTimer != null)
             {
                 pendingTimer.Stop(); pendingTimer.Dispose(); pendingTimer = null;
+                PasteGuard.Disarm();
                 ClipBackup b = pending; pending = null;
                 // 還原前使用者若自己又複製了別的東西，就以那個為準
-                if (b != null && Native.GetClipboardSequenceNumber() == pendingSeq) return b;
+                if (b != null && Native.GetClipboardSequenceNumber() == templateSeq) return b;
             }
             return Backup();
         }
 
-        static void ScheduleRestore(ClipBackup b, uint seq)
+        static void ScheduleRestore(ClipBackup b)
         {
-            pending = b; pendingSeq = seq;
-            pendingTimer = new System.Windows.Forms.Timer { Interval = RestoreDelayMs };
-            pendingTimer.Tick += delegate { FlushPending(); };
+            pending = b;
+            pendingTimer = new System.Windows.Forms.Timer { Interval = readByTarget ? RestoreAfterReadMs : RestoreDelayMs };
+            pendingTimer.Tick += delegate { OnRestoreTimer(); };
             pendingTimer.Start();
+            PasteGuard.Arm(clipOwner.Handle, WM_USER_PASTE);
+        }
+
+        static void OnRestoreTimer()
+        {
+            // 還沒有任何程式讀過範本：目標程式還沒貼（例如正忙），現在放回的話範本會貼成原本的內容，所以再等
+            if (!readByTarget && !rendered && pendingTimer != null && Environment.TickCount - keySentTick < MaxWaitMs) return;
+            FlushPending();
         }
 
         // 立刻完成尚未執行的剪貼簿還原
@@ -1155,18 +1338,49 @@ namespace Pocketbrief
         {
             if (pendingTimer == null) return;
             pendingTimer.Stop(); pendingTimer.Dispose(); pendingTimer = null;
+            PasteGuard.Disarm();
             ClipBackup b = pending; pending = null;
-            if (b != null && Native.GetClipboardSequenceNumber() == pendingSeq) Restore(b);  // 使用者又複製了別的東西就不要蓋掉
+            if (b != null && Native.GetClipboardSequenceNumber() == templateSeq) Restore(b);  // 使用者又複製了別的東西就不要蓋掉
+        }
+
+        // 使用者在放回之前自己按了貼上（按鍵已被 PasteGuard 攔下）：放回原本的剪貼簿，再替他把這個按鍵送出去
+        static void OnUserPaste(uint vk)
+        {
+            int wait = readByTarget || pending == null ? 0 : UserPasteMinGapMs - (Environment.TickCount - keySentTick);
+            if (wait <= 0) { FlushPending(); ReplayPasteKey(vk); return; }
+            // 輸出用的 Ctrl+V 才剛送出，目標程式可能還沒讀走範本：稍等再放回（等待中照常處理來讀範本的要求）
+            var t = new System.Windows.Forms.Timer { Interval = wait };
+            t.Tick += delegate { t.Stop(); t.Dispose(); FlushPending(); ReplayPasteKey(vk); };
+            t.Start();
+        }
+
+        // 測試時換掉，避免真的送出按鍵
+        static Action<uint> ReplayPasteKey = SendPasteKey;
+
+        static void SendPasteKey(uint vk)
+        {
+            // 使用者通常還按著 Ctrl（或 Shift），照原樣只補送那個鍵；萬一已經放開，連修飾鍵一起補
+            byte mod = vk == 0x2D ? VK_SHIFT : VK_CONTROL;
+            uint ext = vk == 0x2D ? Native.KEYEVENTF_EXTENDEDKEY : 0;   // Insert 是延伸鍵
+            bool held = (Native.GetAsyncKeyState(mod) & 0x8000) != 0;
+            if (!held) Native.keybd_event(mod, 0, 0, UIntPtr.Zero);
+            Native.keybd_event((byte)vk, 0, ext, UIntPtr.Zero);
+            Native.keybd_event((byte)vk, 0, ext | KEYUP, UIntPtr.Zero);
+            if (!held) Native.keybd_event(mod, 0, KEYUP, UIntPtr.Zero);
         }
 
         static void Restore(ClipBackup b)
         {
+            if (!OpenClip()) return;
             try
             {
-                if (b.WasEmpty) Clipboard.Clear();
-                else if (b.Data != null) Clipboard.SetDataObject(b.Data, true, 5, 50);
+                Native.EmptyClipboard();
+                renderText = null;
+                if (b.WasEmpty || b.Items == null) return;
+                foreach (KeyValuePair<uint, byte[]> it in b.Items) SetBytes(it.Key, it.Value);
             }
             catch { }
+            finally { Native.CloseClipboard(); }
         }
 
         // 複製目前選取的文字（快速新增用）；取完後把剪貼簿還原。呼叫前使用者應已放開修飾鍵。
@@ -1194,22 +1408,35 @@ namespace Pocketbrief
         // 回傳 null 表示無法備份（剪貼簿被鎖住，或只有無法還原的特殊格式）
         static ClipBackup Backup()
         {
+            if (!OpenClip()) return null;
             try
             {
-                IDataObject src = Clipboard.GetDataObject();
-                if (src == null) return new ClipBackup { WasEmpty = true };
-                string[] formats = src.GetFormats(false);
-                if (formats.Length == 0) return new ClipBackup { WasEmpty = true };
-                var dst = new DataObject();
-                int n = 0;
-                foreach (string f in formats)
+                HashSet<uint> keep = KeepFormats();
+                var items = new List<KeyValuePair<uint, byte[]>>();
+                bool any = false;
+                for (uint f = Native.EnumClipboardFormats(0); f != 0; f = Native.EnumClipboardFormats(f))
                 {
-                    if (!KeepFormats.Contains(f)) continue;
-                    try { object d = src.GetData(f, false); if (d != null) { dst.SetData(f, false, d); n++; } } catch { }
+                    any = true;
+                    if (!keep.Contains(f)) continue;
+                    IntPtr h = Native.GetClipboardData(f);
+                    if (h == IntPtr.Zero) continue;
+                    long size = (long)(ulong)Native.GlobalSize(h);
+                    if (size <= 0 || size > MaxFormatBytes) continue;
+                    IntPtr p = Native.GlobalLock(h);
+                    if (p == IntPtr.Zero) continue;
+                    try
+                    {
+                        var bytes = new byte[size];
+                        Marshal.Copy(p, bytes, 0, (int)size);
+                        items.Add(new KeyValuePair<uint, byte[]>(f, bytes));
+                    }
+                    finally { Native.GlobalUnlock(h); }
                 }
-                return n == 0 ? null : new ClipBackup { Data = dst };
+                if (!any) return new ClipBackup { WasEmpty = true };
+                return items.Count == 0 ? null : new ClipBackup { Items = items };
             }
             catch { return null; }
+            finally { Native.CloseClipboard(); }
         }
     }
 
@@ -1288,7 +1515,7 @@ namespace Pocketbrief
             Controls.Add(header);
 
             ApplyStyle(app.Settings.Style);
-            Deactivate += delegate { if (Visible) Close0(false); };
+            Deactivate += delegate { if (Visible && !opening) Close0(false); };
         }
 
         // 套用外觀設定（字型、顏色、大小）；設定沒變就不重做
@@ -1340,6 +1567,10 @@ namespace Pocketbrief
             list.Columns[0].Width = list.ClientSize.Width;
         }
 
+        // 叫出的過程中不理會「失去焦點」：第一次搶焦點被 Windows 拒絕時會立刻收到一次，
+        // 若照常收起清單，接下來的備援雖然搶到了焦點，清單卻已經藏起來，看起來就是按了沒反應
+        bool opening;
+
         public void Open(IntPtr target)
         {
             Target = target;
@@ -1347,12 +1578,17 @@ namespace Pocketbrief
             ApplyStyle(app.Settings.Style);
             Refilter();
             PlaceNearCaret(target);
-            Show();
-            Activate();
-            Native.SetForegroundWindow(Handle);
-            // 用 `+1 這類組合叫出時，Windows 不一定准許搶焦點（一般快速鍵有系統給的許可，攔截來的沒有）；
-            // 搶不到就借用前景視窗的輸入狀態再試一次
-            if (Native.GetForegroundWindow() != Handle) ForceForeground();
+            opening = true;
+            try
+            {
+                Show();
+                Activate();
+                Native.SetForegroundWindow(Handle);
+                // 用 `+1 這類組合叫出時，Windows 不一定准許搶焦點（一般快速鍵有系統給的許可，攔截來的沒有）；
+                // 搶不到就借用前景視窗的輸入狀態再試一次
+                if (Native.GetForegroundWindow() != Handle) ForceForeground();
+            }
+            finally { opening = false; }
             list.Focus();
             // 稍後再確認一次：還是沒搶到焦點的話，清單不能留在畫面上，否則打的代碼會跑進原本的視窗
             var check = new System.Windows.Forms.Timer { Interval = 250 };
@@ -2942,6 +3178,107 @@ namespace Pocketbrief
             if (threadId != 0) Native.PostThreadMessage(threadId, Native.WM_QUIT, IntPtr.Zero, IntPtr.Zero);
             if (thread != null) thread.Join(1000);
             thread = null; threadId = 0;
+        }
+    }
+
+    // ───────────── 輸出範本後，攔下使用者自己按的「貼上」 ─────────────
+    // 輸出範本時暫借剪貼簿，要等目標程式讀走範本才放回使用者原本的內容。放回之前使用者若自己按 Ctrl+V（或 Shift+Insert），
+    // 貼出的會是範本；所以只在這段等待期間掛上鍵盤攔截，攔到就通知主程式先放回、再替他送出按鍵（Paster.OnUserPaste）。
+    // 本程式自己送出的按鍵（注入的）一律放行，所以輸出範本用的 Ctrl+V 不會被攔。
+    static class PasteGuard
+    {
+        const int WM_ARM = 0x8000 + 0x61, WM_DISARM = 0x8000 + 0x62;
+        static Thread thread;
+        static volatile uint threadId;
+        static IntPtr hook;
+        static Native.LowLevelKeyboardProc proc;   // 要留著參考，避免被記憶體回收
+        static volatile bool armed;
+        static uint swallowUp;                     // 攔下的按鍵：它的放開也要吃掉（主程式會連按下帶放開一起補送）
+        static IntPtr notifyWnd;
+        static int notifyMsg;
+
+        public static void Arm(IntPtr wnd, int msg)
+        {
+            notifyWnd = wnd; notifyMsg = msg;
+            if (thread == null) Start();
+            armed = true;
+            if (threadId != 0) Native.PostThreadMessage(threadId, WM_ARM, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        public static void Disarm()
+        {
+            if (!armed) return;
+            armed = false;
+            if (threadId != 0) Native.PostThreadMessage(threadId, WM_DISARM, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        // 攔截要在有訊息迴圈的執行緒上；用一條常駐的背景執行緒，需要時才掛上攔截
+        static void Start()
+        {
+            var ready = new ManualResetEvent(false);
+            thread = new Thread(() =>
+            {
+                Native.MSG msg;
+                Native.PeekMessage(out msg, IntPtr.Zero, 0, 0, 0);   // 先建立訊息佇列
+                threadId = Native.GetCurrentThreadId();
+                proc = HookProc;
+                ready.Set();
+                while (Native.GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
+                {
+                    if (msg.message == WM_ARM && armed && hook == IntPtr.Zero)
+                        hook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, proc, Native.GetModuleHandle(null), 0);
+                    else if (msg.message == WM_DISARM) Unhook();
+                }
+            });
+            thread.IsBackground = true;
+            thread.Name = "PasteGuard";
+            thread.Start();
+            ready.WaitOne(3000);
+        }
+
+        static void Unhook()
+        {
+            if (armed || swallowUp != 0 || hook == IntPtr.Zero) return;   // 還在等攔下按鍵的放開時先別拆
+            Native.UnhookWindowsHookEx(hook);
+            hook = IntPtr.Zero;
+        }
+
+        static IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0)
+            {
+                var k = (Native.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Native.KBDLLHOOKSTRUCT));
+                int m = wParam.ToInt32();
+                bool down = m == Native.WM_KEYDOWN || m == Native.WM_SYSKEYDOWN;
+                bool up = m == Native.WM_KEYUP || m == Native.WM_SYSKEYUP;
+                if ((k.flags & Native.LLKHF_INJECTED) == 0)
+                {
+                    if (up && swallowUp != 0 && k.vkCode == swallowUp)
+                    {
+                        swallowUp = 0;
+                        if (!armed) Native.PostThreadMessage(threadId, WM_DISARM, IntPtr.Zero, IntPtr.Zero);
+                        return (IntPtr)1;
+                    }
+                    if (down && armed && IsPaste(k.vkCode))
+                    {
+                        armed = false; swallowUp = k.vkCode;
+                        Native.PostMessage(notifyWnd, notifyMsg, (IntPtr)k.vkCode, IntPtr.Zero);
+                        return (IntPtr)1;
+                    }
+                }
+            }
+            return Native.CallNextHookEx(hook, nCode, wParam, lParam);
+        }
+
+        static bool KeyDown(int vk) { return (Native.GetAsyncKeyState(vk) & 0x8000) != 0; }
+
+        // Ctrl+V（含 Ctrl+Shift+V：部分程式的「貼上為純文字」）或 Shift+Insert
+        static bool IsPaste(uint vk)
+        {
+            if (KeyDown(0x12) || KeyDown(0x5B) || KeyDown(0x5C)) return false;   // Alt、Win
+            if (vk == 0x56) return KeyDown(0x11);
+            if (vk == 0x2D) return KeyDown(0x10) && !KeyDown(0x11);
+            return false;
         }
     }
 
