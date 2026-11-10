@@ -1,5 +1,7 @@
-# 推送版本標籤（例如 v4.3.0）時：先檢查版本號與發布說明，再同時編譯 Windows 版與 Mac 版，
+# 推送版本標籤（例如 v4.3.0）時：先檢查版本號與發布說明，再編譯 Windows 版與 Mac 版，
 # 建立 GitHub Release 並附上兩個 zip。發布說明取自 docs/release-notes/<標籤>.md。
+# 只更新 Windows 版時：macos/VERSION 不改，就只編 Windows 版，Mac 版沿用上一版 Release 的檔案
+# （「最新版」頁面才一直都有 Mac 版可下載）。
 name: Release
 
 on:
@@ -13,17 +15,24 @@ jobs:
   # 先花幾秒檢查，避免兩個平台都編完了才在最後一步失敗
   check:
     runs-on: ubuntu-latest
+    outputs:
+      mac: ${{ steps.v.outputs.mac }}
     steps:
       - uses: actions/checkout@v4
       - name: Version numbers and release notes
+        id: v
         run: |
           tag="$GITHUB_REF_NAME"; ver="${tag#v}"
           notes="docs/release-notes/$tag.md"
           [ -f "$notes" ] || { echo "::error::缺少發布說明 $notes"; exit 1; }
-          mac="$(tr -d '[:space:]' < macos/VERSION)"
-          [ "$mac" = "$ver" ] || { echo "::error::標籤 $tag 與 macos/VERSION（$mac）不一致"; exit 1; }
           grep -q "AssemblyVersion(\"$ver.0\")" src/Pocketbrief.cs || { echo "::error::src/Pocketbrief.cs 的 AssemblyVersion 不是 $ver.0"; exit 1; }
-          echo "版本一致：$ver"
+          mac="$(tr -d '[:space:]' < macos/VERSION)"
+          if [ "$mac" = "$ver" ]; then
+            echo "mac=true" >> "$GITHUB_OUTPUT"; echo "Windows 版與 Mac 版：$ver"
+          else
+            echo "mac=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::macos/VERSION 是 $mac：這次只發布 Windows 版 $ver，Mac 版沿用上一版的檔案"
+          fi
 
   windows:
     needs: check
@@ -48,6 +57,7 @@ jobs:
 
   mac:
     needs: check
+    if: needs.check.outputs.mac == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +69,9 @@ jobs:
           path: macos/dist/*.zip
 
   release:
-    needs: [windows, mac]
+    needs: [check, windows, mac]
+    # mac 被略過（只發布 Windows 版）時照樣發布；任何一個編譯失敗就不發布
+    if: ${{ !cancelled() && needs.windows.result == 'success' && (needs.mac.result == 'success' || needs.mac.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write   # 建立 Release
@@ -69,6 +81,11 @@ jobs:
         with:
           path: out
           merge-multiple: true
+      - name: Reuse the previous Mac download
+        if: needs.check.outputs.mac != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo "$GITHUB_REPOSITORY" --pattern '*-mac.zip' --dir out   # 不指定標籤＝目前的最新版
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
